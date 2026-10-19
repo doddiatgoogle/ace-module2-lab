@@ -21,6 +21,11 @@ function favicon () {
   return utils.extractFilename(config.get('application.favicon'))
 }
 
+function escapePug (str: string) {
+  const escaped = str.replace(/\\*#{/g, '\\#{').replace(/\\*!{/g, '\\!{')
+  return escaped.startsWith('\\') ? escaped : '\\' + escaped
+}
+
 export function getUserProfile () {
   return async (req: Request, res: Response, next: NextFunction) => {
     let template: string
@@ -58,34 +63,42 @@ export function getUserProfile () {
         if (!code) {
           throw new Error('Username is null')
         }
-        const singleQuoteRegex = /^'(?:[^'\\]|\\.)*'$/
-        const doubleQuoteRegex = /^"(?:[^"\\]|\\.)*"$/
-        const backtickRegex = /^`(?:[^`\\$]|\\.|\$(?!{))*`$/
-        const numericRegex = /^-?\d+(?:\.\d+)?$/
+        if (code.includes('#') || code.includes('!')) {
+          throw new Error('Unsafe code execution blocked')
+        }
+        const arithmeticRegex = /^(?:[0-9+\-*/%().\s]*\d[0-9+\-*/%().\s]*)$/
+        const singleQuoteRegex = /^'[^'\\#$]*'$/
+        const doubleQuoteRegex = /^"[^"\\#$]*"$/
+        const backtickRegex = /^`[^`\\#$]*`$/
         const booleanRegex = /^(?:true|false|null|undefined)$/
 
-        const isSafe = singleQuoteRegex.test(code) ||
+        const isSafe = arithmeticRegex.test(code) ||
+          singleQuoteRegex.test(code) ||
           doubleQuoteRegex.test(code) ||
           backtickRegex.test(code) ||
-          numericRegex.test(code) ||
           booleanRegex.test(code)
 
         if (!isSafe) {
           throw new Error('Unsafe code execution blocked')
         }
-        username = eval(code) // eslint-disable-line no-eval
+        const evaluated = eval(code) // eslint-disable-line no-eval
+        const evaluatedStr = String(evaluated)
+        if (evaluatedStr.includes('#{') || evaluatedStr.includes('!{')) {
+          throw new Error('Unsafe code execution blocked')
+        }
+        username = evaluatedStr
       } catch (err) {
-        username = '\\' + username
+        username = escapePug(user.username ?? '')
       }
     } else {
-      username = '\\' + username
+      username = escapePug(user.username ?? '')
     }
 
     const themeKey = config.get<string>('application.theme') as keyof typeof themes
     const theme = themes[themeKey] || themes['bluegrey-lightgreen']
 
     if (username) {
-      template = template.replace(/_username_/g, username)
+      template = template.replace(/_username_/g, () => username)
     }
     template = template.replace(/_emailHash_/g, security.hash(user?.email))
     template = template.replace(/_title_/g, entities.encode(config.get<string>('application.name')))
